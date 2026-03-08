@@ -4,6 +4,7 @@
     <aside class="sidebar" :class="{ collapsed: sidebarCollapsed }">
       <div class="sidebar-header">
         <div class="logo">
+          <img src="/MSRP.png" alt="MSRP" class="brand-logo" />
           <span class="logo-text" v-if="!sidebarCollapsed">MSRP Real Estate</span>
           <span class="logo-icon" v-else>M</span>
         </div>
@@ -28,16 +29,17 @@
       </nav>
 
       <div class="sidebar-footer">
-        <div class="user-profile" v-if="!sidebarCollapsed">
+        <div class="user-profile" v-if="!sidebarCollapsed && session">
           <div class="user-avatar">
-            <img src="https://images.pexels.com/photos/220453/pexels-photo-220453.jpeg?auto=compress&cs=tinysrgb&w=100" alt="User">
+            <img :src="session.user.avatarUrl || '/MSRP.png'" alt="User">
             <span class="status-indicator"></span>
           </div>
           <div class="user-info">
-            <div class="user-name">John Doe</div>
-            <div class="user-role">Real Estate Agent</div>
+            <div class="user-name">{{ displayName }}</div>
+            <div class="user-role">{{ session.guildMembership.roleLabel }}</div>
           </div>
         </div>
+        <button v-if="!sidebarCollapsed && !session" class="discord-auth-btn" type="button" @click="startDiscordLogin">Sign in with Discord</button>
       </div>
     </aside>
 
@@ -63,6 +65,8 @@
               <path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/>
             </svg>
           </button>
+          <button v-if="!session" class="primary-button" type="button" @click="startDiscordLogin">Sign in</button>
+          <button v-else class="secondary-button" type="button" @click="logout">Logout</button>
         </div>
       </header>
 
@@ -273,13 +277,13 @@
                     </div>
                   </div>
                   <div class="request-actions">
-                    <button class="approve-button">
+                    <button class="approve-button" type="button" @click="reviewRequest(request, 'approve')">
                       <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
                         <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/>
                       </svg>
                       Approve
                     </button>
-                    <button class="deny-button">
+                    <button class="deny-button" type="button" @click="reviewRequest(request, 'deny')">
                       <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
                         <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/>
                       </svg>
@@ -371,18 +375,21 @@
             <div class="settings-section">
               <h3>Active Buyer Requests</h3>
               <div class="mini-requests-list">
-                <div class="mini-request" v-for="i in 2" :key="i">
+                <div class="mini-request" v-for="req in selectedPropertyRequests" :key="req.id">
                   <div class="mini-request-user">
-                    <img src="https://images.pexels.com/photos/1222271/pexels-photo-1222271.jpeg?auto=compress&cs=tinysrgb&w=100" alt="">
+                    <img src="/MSRP.png" alt="">
                     <div>
-                      <div class="mini-request-name">Buyer Name {{ i }}</div>
-                      <div class="mini-request-time">2 hours ago</div>
+                      <div class="mini-request-name">{{ req.requesterName || req.requesterUserId }}</div>
+                      <div class="mini-request-time">{{ formatTime(req.createdAt) }}</div>
                     </div>
                   </div>
                   <div class="mini-request-actions">
-                    <button class="mini-approve">✓</button>
-                    <button class="mini-deny">✕</button>
+                    <button class="mini-approve" disabled>&#10003;</button>
+                    <button class="mini-deny" disabled>&#10005;</button>
                   </div>
+                </div>
+                <div v-if="selectedPropertyRequests.length === 0" class="mini-request">
+                  <div class="mini-request-time">No active requests on this property.</div>
                 </div>
               </div>
             </div>
@@ -492,10 +499,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 
 interface Property {
-  id: number
+  id: string
   title: string
   description: string
   price: number
@@ -503,10 +510,12 @@ interface Property {
   image: string
   favorite: boolean
   type?: string
+  sellerUserId?: string
+  status?: string
 }
 
 interface OwnedProperty {
-  id: number
+  id: string
   title: string
   district: string
   image: string
@@ -522,6 +531,24 @@ interface Toast {
   type: 'success' | 'error'
 }
 
+type Session = {
+  user: {
+    id: string
+    username: string
+    global_name?: string | null
+    avatarUrl?: string
+  }
+  guildMembership: {
+    guildId: string
+    isMember: boolean
+    roleLabel: string
+    permissions?: {
+      hasManagementRole?: boolean
+      hasAgentRole?: boolean
+    }
+  }
+}
+
 const sidebarCollapsed = ref(false)
 const activeTab = ref('dashboard')
 const activeManagementTab = ref('listings')
@@ -531,13 +558,27 @@ const selectedPropertySettings = ref<OwnedProperty | null>(null)
 const showCreateListingModal = ref(false)
 const showNotifications = ref(false)
 const toasts = ref<Toast[]>([])
+const session = ref<Session | null>(null)
 
-const navItems = [
-  { id: 'dashboard', label: 'Dashboard', icon: '<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M3 13h8V3H3v10zm0 8h8v-6H3v6zm10 0h8V11h-8v10zm0-18v6h8V3h-8z"/></svg>' },
-  { id: 'marketplace', label: 'Marketplace', icon: '<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M7 18c-1.1 0-1.99.9-1.99 2S5.9 22 7 22s2-.9 2-2-.9-2-2-2zM1 2v2h2l3.6 7.59-1.35 2.45c-.16.28-.25.61-.25.96 0 1.1.9 2 2 2h12v-2H7.42c-.14 0-.25-.11-.25-.25l.03-.12.9-1.63h7.45c.75 0 1.41-.41 1.75-1.03l3.58-6.49c.08-.14.12-.31.12-.48 0-.55-.45-1-1-1H5.21l-.94-2H1zm16 16c-1.1 0-1.99.9-1.99 2s.89 2 1.99 2 2-.9 2-2-.9-2-2-2z"/></svg>' },
-  { id: 'properties', label: 'My Properties', icon: '<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/></svg>', badge: '3' },
-  { id: 'management', label: 'Management', icon: '<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l-5.5 9h11z M12 22l5.5-9h-11z M2 17h8v-2H2v2zm0-4h8v-2H2v2z M22 13h-8v2h8v-2zm0 4h-8v2h8v-2z"/></svg>' },
-]
+const properties = ref<Property[]>([])
+const ownedProperties = ref<OwnedProperty[]>([])
+const purchaseRequests = ref<any[]>([])
+const salesLogs = ref<any[]>([])
+const myRequests = ref<any[]>([])
+const economy = reactive({ cash: 0, bank: 0, error: '' })
+
+const navItems = computed(() => {
+  const items = [
+    { id: 'dashboard', label: 'Dashboard', icon: '<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M3 13h8V3H3v10zm0 8h8v-6H3v6zm10 0h8V11h-8v10zm0-18v6h8V3h-8z"/></svg>' },
+    { id: 'marketplace', label: 'Marketplace', icon: '<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M7 18c-1.1 0-1.99.9-1.99 2S5.9 22 7 22s2-.9 2-2-.9-2-2-2zM1 2v2h2l3.6 7.59-1.35 2.45c-.16.28-.25.61-.25.96 0 1.1.9 2 2 2h12v-2H7.42c-.14 0-.25-.11-.25-.25l.03-.12.9-1.63h7.45c.75 0 1.41-.41 1.75-1.03l3.58-6.49c.08-.14.12-.31.12-.48 0-.55-.45-1-1-1H5.21l-.94-2H1z"/></svg>' },
+    { id: 'properties', label: 'My Properties', icon: '<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/></svg>', badge: String(ownedProperties.value.length) },
+  ]
+  const isMgmt = Boolean(session.value?.guildMembership?.permissions?.hasManagementRole || session.value?.guildMembership?.permissions?.hasAgentRole)
+  if (isMgmt) {
+    items.push({ id: 'management', label: 'Management', icon: '<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l-5.5 9h11z M12 22l5.5-9h-11z M2 17h8v-2H2v2zm0-4h8v-2H2v2z M22 13h-8v2h8v-2zm0 4h-8v2h8v-2z"/></svg>' })
+  }
+  return items
+})
 
 const managementTabs = [
   { id: 'listings', label: 'Listings Admin' },
@@ -545,189 +586,27 @@ const managementTabs = [
   { id: 'economy', label: 'Economy Admin' },
 ]
 
-const economyStats = [
-  {
-    label: 'Cash Balance',
-    value: '$45,230',
-    change: '+12.5%',
-    trend: 'positive',
-    color: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-    icon: '<svg width="24" height="24" viewBox="0 0 24 24" fill="white"><path d="M11.8 10.9c-2.27-.59-3-1.2-3-2.15 0-1.09 1.01-1.85 2.7-1.85 1.78 0 2.44.85 2.5 2.1h2.21c-.07-1.72-1.12-3.3-3.21-3.81V3h-3v2.16c-1.94.42-3.5 1.68-3.5 3.61 0 2.31 1.91 3.46 4.7 4.13 2.5.6 3 1.48 3 2.41 0 .69-.49 1.79-2.7 1.79-2.06 0-2.87-.92-2.98-2.1h-2.2c.12 2.19 1.76 3.42 3.68 3.83V21h3v-2.15c1.95-.37 3.5-1.5 3.5-3.55 0-2.84-2.43-3.81-4.7-4.4z"/></svg>'
-  },
-  {
-    label: 'Bank Balance',
-    value: '$128,500',
-    change: '+8.2%',
-    trend: 'positive',
-    color: 'linear-gradient(135deg, #f093fb 0%, #f5576c 100%)',
-    icon: '<svg width="24" height="24" viewBox="0 0 24 24" fill="white"><path d="M11.5 1L2 6v2h19V6m-5 4v7h3v-7M2 22h19v-3H2m8-9v7h3v-7m-9 0v7h3v-7H4z"/></svg>'
-  },
-  {
-    label: 'Total Worth',
-    value: '$173,730',
-    change: '+15.8%',
-    trend: 'positive',
-    color: 'linear-gradient(135deg, #4facfe 0%, #00f2fe 100%)',
-    icon: '<svg width="24" height="24" viewBox="0 0 24 24" fill="white"><path d="M16 6l2.29 2.29-4.88 4.88-4-4L2 16.59 3.41 18l6-6 4 4 6.3-6.29L22 12V6z"/></svg>'
-  },
-  {
-    label: 'Properties Owned',
-    value: '3',
-    change: '+1 this month',
-    trend: 'neutral',
-    color: 'linear-gradient(135deg, #fa709a 0%, #fee140 100%)',
-    icon: '<svg width="24" height="24" viewBox="0 0 24 24" fill="white"><path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/></svg>'
-  },
-]
-
-const recentActivity = [
-  {
-    id: 1,
-    title: 'Purchase Request Approved',
-    time: '2 hours ago',
-    amount: '+$50,000',
-    type: 'positive',
-    color: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-    icon: '<svg width="20" height="20" viewBox="0 0 24 24" fill="white"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>'
-  },
-  {
-    id: 2,
-    title: 'Property Listed',
-    time: '5 hours ago',
-    amount: 'Downtown Loft',
-    type: 'neutral',
-    color: 'linear-gradient(135deg, #4facfe 0%, #00f2fe 100%)',
-    icon: '<svg width="20" height="20" viewBox="0 0 24 24" fill="white"><path d="M12 2l-5.5 9h11z"/></svg>'
-  },
-  {
-    id: 3,
-    title: 'Bank Deposit',
-    time: '1 day ago',
-    amount: '+$25,000',
-    type: 'positive',
-    color: 'linear-gradient(135deg, #f093fb 0%, #f5576c 100%)',
-    icon: '<svg width="20" height="20" viewBox="0 0 24 24" fill="white"><path d="M11.5 1L2 6v2h19V6m-5 4v7h3v-7M2 22h19v-3H2m8-9v7h3v-7m-9 0v7h3v-7H4z"/></svg>'
-  },
-]
-
-const properties = ref([
-  {
-    id: 1,
-    title: 'Luxury Downtown Penthouse',
-    description: 'Stunning modern penthouse in the heart of downtown with panoramic city views.',
-    price: 125000,
-    district: 'Downtown',
-    image: 'https://images.pexels.com/photos/1643383/pexels-photo-1643383.jpeg?auto=compress&cs=tinysrgb&w=800',
-    favorite: false,
-    type: 'Residential'
-  },
-  {
-    id: 2,
-    title: 'Cozy Suburban Home',
-    description: 'Beautiful family home in quiet suburban neighborhood with large backyard.',
-    price: 75000,
-    district: 'Suburbs',
-    image: 'https://images.pexels.com/photos/1396122/pexels-photo-1396122.jpeg?auto=compress&cs=tinysrgb&w=800',
-    favorite: false,
-    type: 'Residential'
-  },
-  {
-    id: 3,
-    title: 'Modern Office Space',
-    description: 'Prime commercial space perfect for startups and small businesses.',
-    price: 200000,
-    district: 'Business District',
-    image: 'https://images.pexels.com/photos/380768/pexels-photo-380768.jpeg?auto=compress&cs=tinysrgb&w=800',
-    favorite: false,
-    type: 'Commercial'
-  },
-  {
-    id: 4,
-    title: 'Beachfront Villa',
-    description: 'Exclusive beachfront property with private access to the shore.',
-    price: 350000,
-    district: 'Coastal',
-    image: 'https://images.pexels.com/photos/1118877/pexels-photo-1118877.jpeg?auto=compress&cs=tinysrgb&w=800',
-    favorite: true,
-    type: 'Luxury'
-  },
-  {
-    id: 5,
-    title: 'Industrial Warehouse',
-    description: 'Spacious warehouse facility with modern loading docks and storage.',
-    price: 180000,
-    district: 'Industrial',
-    image: 'https://images.pexels.com/photos/236705/pexels-photo-236705.jpeg?auto=compress&cs=tinysrgb&w=800',
-    favorite: false,
-    type: 'Industrial'
-  },
-  {
-    id: 6,
-    title: 'Mountain Retreat',
-    description: 'Secluded mountain cabin perfect for weekend getaways.',
-    price: 95000,
-    district: 'Mountains',
-    image: 'https://images.pexels.com/photos/2227832/pexels-photo-2227832.jpeg?auto=compress&cs=tinysrgb&w=800',
-    favorite: false,
-    type: 'Residential'
-  },
+const economyStats = computed(() => [
+  { label: 'Cash Balance', value: money(economy.cash), change: 'Live data', trend: 'positive', color: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', icon: '<svg width="24" height="24" viewBox="0 0 24 24" fill="white"><path d="M3 7h18v10H3z"/></svg>' },
+  { label: 'Bank Balance', value: money(economy.bank), change: 'Live data', trend: 'positive', color: 'linear-gradient(135deg, #f093fb 0%, #f5576c 100%)', icon: '<svg width="24" height="24" viewBox="0 0 24 24" fill="white"><path d="M11.5 1L2 6v2h19V6"/></svg>' },
+  { label: 'Total Worth', value: money(economy.cash + economy.bank), change: 'Live data', trend: 'positive', color: 'linear-gradient(135deg, #4facfe 0%, #00f2fe 100%)', icon: '<svg width="24" height="24" viewBox="0 0 24 24" fill="white"><path d="M16 6l2.29 2.29-4.88 4.88-4-4"/></svg>' },
+  { label: 'Properties Owned', value: String(ownedProperties.value.length), change: 'Live data', trend: 'neutral', color: 'linear-gradient(135deg, #fa709a 0%, #fee140 100%)', icon: '<svg width="24" height="24" viewBox="0 0 24 24" fill="white"><path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/></svg>' },
 ])
 
-const ownedProperties = [
-  {
-    id: 1,
-    title: 'Downtown Apartment',
-    district: 'Downtown',
-    image: 'https://images.pexels.com/photos/1643383/pexels-photo-1643383.jpeg?auto=compress&cs=tinysrgb&w=200',
-    purchasePrice: 85000,
-    ownedSince: 'Jan 15, 2024',
-    activeRequests: 2
-  },
-  {
-    id: 2,
-    title: 'Suburban House',
-    district: 'Suburbs',
-    image: 'https://images.pexels.com/photos/1396122/pexels-photo-1396122.jpeg?auto=compress&cs=tinysrgb&w=200',
-    purchasePrice: 65000,
-    ownedSince: 'Dec 3, 2023',
-    activeRequests: 0
-  },
-  {
-    id: 3,
-    title: 'Commercial Space',
-    district: 'Business District',
-    image: 'https://images.pexels.com/photos/380768/pexels-photo-380768.jpeg?auto=compress&cs=tinysrgb&w=200',
-    purchasePrice: 150000,
-    ownedSince: 'Feb 20, 2024',
-    activeRequests: 1
-  },
-]
+const recentActivity = computed(() => salesLogs.value.slice(0, 5).map((log: any) => ({
+  id: log.id,
+  title: log.listingTitle || 'Listing Event',
+  time: formatTime(log.createdAt),
+  amount: money(Number(log.price || 0)),
+  type: String(log.status || '').includes('approved') ? 'positive' : 'neutral',
+  color: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+  icon: '<svg width="20" height="20" viewBox="0 0 24 24" fill="white"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7z"/></svg>',
+})))
 
-const allListings = properties.value.map(p => ({ ...p, status: Math.random() > 0.5 ? 'available' : 'pending' }))
-
-const purchaseRequests = [
-  {
-    id: 1,
-    username: 'JohnDoe#1234',
-    userAvatar: 'https://images.pexels.com/photos/1222271/pexels-photo-1222271.jpeg?auto=compress&cs=tinysrgb&w=100',
-    propertyTitle: 'Luxury Downtown Penthouse',
-    amount: 125000,
-    time: '2 hours ago',
-    status: 'pending'
-  },
-  {
-    id: 2,
-    username: 'JaneSmith#5678',
-    userAvatar: 'https://images.pexels.com/photos/733872/pexels-photo-733872.jpeg?auto=compress&cs=tinysrgb&w=100',
-    propertyTitle: 'Cozy Suburban Home',
-    amount: 75000,
-    time: '5 hours ago',
-    status: 'pending'
-  },
-]
+const allListings = computed(() => properties.value.map((p: any) => ({ ...p, status: p.status || 'listed' })))
 
 const currentTabLabel = computed(() => {
-  return navItems.find(item => item.id === activeTab.value)?.label || 'Dashboard'
+  return navItems.value.find(item => item.id === activeTab.value)?.label || 'Dashboard'
 })
 
 const filteredProperties = computed(() => {
@@ -736,6 +615,11 @@ const filteredProperties = computed(() => {
     p.title.toLowerCase().includes(searchQuery.value.toLowerCase()) ||
     p.district.toLowerCase().includes(searchQuery.value.toLowerCase())
   )
+})
+
+const selectedPropertyRequests = computed(() => {
+  if (!selectedProperty.value) return []
+  return myRequests.value.filter((req: any) => String(req.listingId) === String(selectedProperty.value?.id) && String(req.status) === 'pending')
 })
 
 function openPropertyModal(property: any) {
@@ -754,16 +638,61 @@ function closeSettingsModal() {
   selectedPropertySettings.value = null
 }
 
-function toggleFavorite(id: number) {
+function toggleFavorite(id: string) {
   const property = properties.value.find(p => p.id === id)
   if (property) {
     property.favorite = !property.favorite
   }
 }
 
-function requestToBuy(property: any) {
-  showToast('Request Submitted', `Your purchase request for ${property.title} has been submitted.`, 'success')
-  closePropertyModal()
+async function requestToBuy(property: Property | null) {
+  if (!property) return
+  if (!session.value) {
+    showToast('Sign in required', 'Please sign in with Discord before submitting requests.', 'error')
+    return
+  }
+  try {
+    const response = await fetch('/api/listings/request-purchase', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        listingId: property.id,
+        requesterUserId: session.value.user.id,
+        requesterName: displayName.value,
+        requestReason: '',
+      }),
+    })
+    const payload = await response.json()
+    if (!payload?.ok) throw new Error(payload?.error || 'Failed to submit request.')
+    showToast('Request Submitted', `Your purchase request for ${property.title} has been submitted.`, 'success')
+    await loadMyRequests()
+  } catch (error) {
+    showToast('Request Failed', error instanceof Error ? error.message : 'Failed to submit request.', 'error')
+  } finally {
+    closePropertyModal()
+  }
+}
+
+async function reviewRequest(request: any, action: 'approve' | 'deny') {
+  if (!session.value) return
+  try {
+    const response = await fetch('/api/management/requests', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        requesterUserId: session.value.user.id,
+        requestId: request.requestId || request.id,
+        action,
+        decisionReason: '',
+      }),
+    })
+    const payload = await response.json()
+    if (!payload?.ok) throw new Error(payload?.error || `Failed to ${action} request.`)
+    showToast('Request Updated', `Request ${action}d successfully.`, 'success')
+    await Promise.all([loadListings(), loadActiveProperties(), loadManagementRequests(), loadSalesLogs()])
+  } catch (error) {
+    showToast('Review Failed', error instanceof Error ? error.message : 'Failed to review request.', 'error')
+  }
 }
 
 function showToast(title: string, message: string, type: 'success' | 'error' = 'success') {
@@ -778,6 +707,173 @@ function removeToast(id: number) {
     toasts.value.splice(index, 1)
   }
 }
+
+const displayName = computed(() => session.value?.user.global_name || session.value?.user.username || 'Guest')
+
+function money(value: number) {
+  return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(
+    Number(value || 0),
+  )
+}
+
+function formatTime(value: string) {
+  if (!value) return 'Recently'
+  const dt = new Date(value)
+  if (Number.isNaN(dt.getTime())) return 'Recently'
+  return dt.toLocaleString()
+}
+
+async function completeOauth() {
+  const params = new URLSearchParams(window.location.search)
+  const code = params.get('code')
+  const state = params.get('state')
+  if (!code) return
+  const url = new URL('/api/auth/discord/callback', window.location.origin)
+  url.searchParams.set('code', code)
+  if (state) url.searchParams.set('state', state)
+  const response = await fetch(url.toString(), { headers: { Accept: 'application/json', 'x-msrp-client-exchange': '1' } })
+  const payload = await response.json()
+  if (payload?.ok) {
+    session.value = payload
+    localStorage.setItem('msrp_re.session.v2', JSON.stringify(payload))
+  }
+  window.history.replaceState({}, document.title, window.location.pathname)
+}
+
+function restoreSession() {
+  try {
+    const saved = localStorage.getItem('msrp_re.session.v2')
+    if (saved) session.value = JSON.parse(saved)
+  } catch {}
+}
+
+function startDiscordLogin() {
+  window.location.href = '/api/auth/discord/login'
+}
+
+function logout() {
+  session.value = null
+  localStorage.removeItem('msrp_re.session.v2')
+}
+
+async function refreshEconomy() {
+  if (!session.value) return
+  const url = new URL('/api/economy/balance', window.location.origin)
+  url.searchParams.set('discordUserId', session.value.user.id)
+  const response = await fetch(url.toString())
+  const payload = await response.json()
+  if (!payload?.ok) throw new Error(payload?.error || 'Failed to load economy.')
+  economy.cash = Number(payload.economy?.cash || 0)
+  economy.bank = Number(payload.economy?.bank || 0)
+}
+
+async function loadListings() {
+  const response = await fetch('/api/listings')
+  const payload = await response.json()
+  if (!payload?.ok) throw new Error(payload?.error || 'Failed to load listings.')
+  properties.value = (payload.listings || [])
+    .filter((item: any) => String(item.status) === 'listed')
+    .map((item: any) => ({
+      id: String(item.id),
+      title: String(item.title || ''),
+      description: String(item.description || ''),
+      price: Number(item.price || 0),
+      district: String(item.district || ''),
+      image: String(item.imageUrl || '/MSRP.png'),
+      favorite: false,
+      type: 'Property',
+      sellerUserId: String(item.sellerUserId || ''),
+      status: String(item.status || ''),
+    }))
+}
+
+async function loadActiveProperties() {
+  if (!session.value) return
+  const url = new URL('/api/active-properties', window.location.origin)
+  url.searchParams.set('userId', session.value.user.id)
+  const response = await fetch(url.toString())
+  const payload = await response.json()
+  if (!payload?.ok) throw new Error(payload?.error || 'Failed to load active properties.')
+  ownedProperties.value = (payload.activeProperties || []).map((item: any) => ({
+    id: String(item.id),
+    title: String(item.title || ''),
+    district: String(item.district || ''),
+    image: String(item.imageUrl || '/MSRP.png'),
+    purchasePrice: Number(item.price || 0),
+    ownedSince: String(item.soldAt || item.createdAt || ''),
+    activeRequests: 0,
+  }))
+}
+
+async function loadManagementRequests() {
+  if (!session.value) return
+  const canManage = Boolean(
+    session.value.guildMembership?.permissions?.hasManagementRole || session.value.guildMembership?.permissions?.hasAgentRole,
+  )
+  if (!canManage) {
+    purchaseRequests.value = []
+    return
+  }
+  const url = new URL('/api/management/requests', window.location.origin)
+  url.searchParams.set('requesterUserId', session.value.user.id)
+  const response = await fetch(url.toString())
+  const payload = await response.json()
+  if (!payload?.ok) throw new Error(payload?.error || 'Failed to load purchase requests.')
+  purchaseRequests.value = (payload.requests || []).map((req: any) => ({
+    id: req.id,
+    username: req.requesterName || req.requesterUserId,
+    userAvatar: '/MSRP.png',
+    propertyTitle: req.listingTitle,
+    amount: Number(req.listingPrice || 0),
+    time: formatTime(req.createdAt),
+    status: req.status,
+    requestId: req.id,
+  }))
+}
+
+async function loadSalesLogs() {
+  if (!session.value) return
+  const canManage = Boolean(
+    session.value.guildMembership?.permissions?.hasManagementRole || session.value.guildMembership?.permissions?.hasAgentRole,
+  )
+  if (!canManage) {
+    salesLogs.value = []
+    return
+  }
+  const url = new URL('/api/management/logs', window.location.origin)
+  url.searchParams.set('userId', session.value.user.id)
+  const response = await fetch(url.toString())
+  const payload = await response.json()
+  if (!payload?.ok) throw new Error(payload?.error || 'Failed to load logs.')
+  salesLogs.value = payload.logs || []
+}
+
+async function loadMyRequests() {
+  if (!session.value) return
+  const url = new URL('/api/my-requests', window.location.origin)
+  url.searchParams.set('requesterUserId', session.value.user.id)
+  const response = await fetch(url.toString())
+  const payload = await response.json()
+  if (!payload?.ok) return
+  myRequests.value = payload.requests || []
+}
+
+async function loadAll() {
+  await loadListings()
+  if (session.value) {
+    await Promise.all([refreshEconomy(), loadActiveProperties(), loadManagementRequests(), loadSalesLogs(), loadMyRequests()])
+  }
+}
+
+onMounted(async () => {
+  restoreSession()
+  await completeOauth()
+  try {
+    await loadAll()
+  } catch (error) {
+    showToast('Load Failed', error instanceof Error ? error.message : 'Failed to load live data.', 'error')
+  }
+})
 </script>
 
 <style scoped>
@@ -821,6 +917,13 @@ function removeToast(id: number) {
   display: flex;
   align-items: center;
   gap: 12px;
+}
+
+.brand-logo {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  object-fit: cover;
 }
 
 .logo-text {
@@ -1005,6 +1108,17 @@ function removeToast(id: number) {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.discord-auth-btn {
+  width: 100%;
+  border: none;
+  border-radius: 8px;
+  background: #5865f2;
+  color: #fff;
+  padding: 10px 12px;
+  font-weight: 600;
+  cursor: pointer;
 }
 
 /* Main Content Styles */
@@ -2456,3 +2570,4 @@ function removeToast(id: number) {
   }
 }
 </style>
+
