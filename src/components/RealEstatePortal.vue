@@ -891,14 +891,17 @@ async function completeOauth() {
   const code = params.get('code')
   const state = params.get('state')
   if (!code) return
-  const url = new URL('/api/auth/discord/callback', window.location.origin)
-  url.searchParams.set('code', code)
-  if (state) url.searchParams.set('state', state)
-  const response = await fetch(url.toString(), { headers: { Accept: 'application/json', 'x-msrp-client-exchange': '1' } })
-  const payload = await response.json()
-  if (payload?.ok) {
+  try {
+    const url = new URL('/api/auth/discord/callback', window.location.origin)
+    url.searchParams.set('code', code)
+    if (state) url.searchParams.set('state', state)
+    const response = await fetch(url.toString(), { headers: { Accept: 'application/json', 'x-msrp-client-exchange': '1' } })
+    const payload = await response.json()
+    if (!payload?.ok) throw new Error(payload?.error || 'Discord login failed.')
     session.value = payload
     localStorage.setItem('msrp_re.session.v2', JSON.stringify(payload))
+  } catch (error) {
+    showToast('Login Failed', error instanceof Error ? error.message : 'Discord login failed.', 'error')
   }
   window.history.replaceState({}, document.title, window.location.pathname)
 }

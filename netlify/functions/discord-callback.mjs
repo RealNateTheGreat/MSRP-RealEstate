@@ -37,7 +37,22 @@ async function fetchDiscordUser(accessToken) {
 export async function handler(event) {
   try {
     const code = event.queryStringParameters?.code
+    const state = event.queryStringParameters?.state
     if (!code) return json(400, { ok: false, error: 'Missing OAuth code.' })
+
+    const clientExchangeHeader =
+      event.headers?.['x-msrp-client-exchange'] || event.headers?.['X-MSRP-CLIENT-EXCHANGE']
+    const isClientExchange = clientExchangeHeader === '1'
+    if (!isClientExchange) {
+      const location = new URL('/', `https://${event.headers?.host || 'localhost'}`)
+      location.searchParams.set('code', code)
+      if (state) location.searchParams.set('state', state)
+      return {
+        statusCode: 302,
+        headers: { location: location.toString() },
+        body: '',
+      }
+    }
 
     const tokenData = await exchangeCode(code)
     const user = await fetchDiscordUser(tokenData.access_token)
@@ -66,15 +81,7 @@ export async function handler(event) {
       },
     }
 
-    if (event.headers?.['x-msrp-client-exchange'] === '1') {
-      return json(200, payload)
-    }
-
-    return {
-      statusCode: 302,
-      headers: { location: '/' },
-      body: '',
-    }
+    return json(200, payload)
   } catch (error) {
     return json(500, { ok: false, error: error instanceof Error ? error.message : 'Discord callback failed.' })
   }
