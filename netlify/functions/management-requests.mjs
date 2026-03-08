@@ -41,9 +41,9 @@ export async function handler(event) {
       if (target.status !== 'pending') return json(409, { ok: false, error: 'Request already processed.' })
 
       if (action === 'deny') {
-        requests[idx] = { ...target, status: 'denied', decisionReason, reviewedByUserId: requesterUserId, updatedAt: new Date().toISOString() }
-        await setPurchaseRequests(requests)
-        return json(200, { ok: true, request: requests[idx] })
+        const updatedRequests = requests.filter((r) => String(r.id) !== requestId)
+        await setPurchaseRequests(updatedRequests)
+        return json(200, { ok: true, removedRequestId: requestId, action: 'deny', decisionReason })
       }
 
       const listings = await getListings()
@@ -56,21 +56,19 @@ export async function handler(event) {
 
       await transferForApprovedRequest({ buyerUserId: String(target.requesterUserId), receiverUserId, amount: Number(listing.price || 0), listingId: String(listing.id) })
 
-      listings[listingIdx] = { ...listing, status: 'sold', ownerUserId: String(target.requesterUserId), ownerName: String(target.requesterName || ''), soldAt: new Date().toISOString() }
-      requests[idx] = { ...target, status: 'approved', decisionReason, reviewedByUserId: requesterUserId, updatedAt: new Date().toISOString() }
-
-      for (let i = 0; i < requests.length; i += 1) {
-        if (i === idx) continue
-        const current = requests[i]
-        if (String(current.listingId) === String(target.listingId) && String(current.status) === 'pending') {
-          requests[i] = { ...current, status: 'denied', decisionReason: 'Another buyer was approved for this listing.', reviewedByUserId: requesterUserId, updatedAt: new Date().toISOString() }
-        }
+      listings[listingIdx] = {
+        ...listing,
+        status: 'sold',
+        ownerUserId: String(target.requesterUserId),
+        ownerName: String(target.requesterName || ''),
+        soldAt: new Date().toISOString(),
       }
 
-      await Promise.all([setListings(listings), setPurchaseRequests(requests)])
+      const updatedRequests = requests.filter((current) => String(current.listingId) !== String(target.listingId))
+      await Promise.all([setListings(listings), setPurchaseRequests(updatedRequests)])
       await appendSalesLog({ listingId: listing.id, listingTitle: listing.title, price: Number(listing.price || 0), buyerUserId: String(target.requesterUserId), receiverUserId, status: 'approved_request_sale' })
 
-      return json(200, { ok: true, request: requests[idx], listing: listings[listingIdx] })
+      return json(200, { ok: true, removedRequestId: requestId, action: 'approve', listing: listings[listingIdx] })
     }
 
     return json(405, { ok: false, error: 'Method not allowed.' })

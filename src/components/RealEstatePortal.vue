@@ -54,6 +54,9 @@
         </div>
 
         <div class="top-nav-actions">
+          <div v-if="session" class="session-timer" :class="{ warning: sessionTimeLeftMs <= 300000 }">
+            Session: {{ sessionTimeLeftLabel }}
+          </div>
           <button class="icon-button" @click="showNotifications = true">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
               <path d="M12 22c1.1 0 2-.9 2-2h-4c0 1.1.89 2 2 2zm6-6v-5c0-3.07-1.64-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.63 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z"/>
@@ -275,6 +278,35 @@
                     </button>
                   </div>
                 </div>
+              </div>
+            </div>
+
+            <div v-if="activeManagementTab === 'sales'" class="management-panel">
+              <h2>Sales Logs</h2>
+              <div class="table-container">
+                <table class="data-table">
+                  <thead>
+                    <tr>
+                      <th>Time</th>
+                      <th>Listing</th>
+                      <th>Buyer</th>
+                      <th>Amount</th>
+                      <th>Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="log in salesLogs" :key="log.id">
+                      <td>{{ formatTime(log.createdAt) }}</td>
+                      <td>{{ log.listingTitle || 'Unknown Listing' }}</td>
+                      <td>{{ log.buyerUserId || 'N/A' }}</td>
+                      <td>{{ money(Number(log.price || 0)) }}</td>
+                      <td><span class="status-badge">{{ String(log.status || 'logged') }}</span></td>
+                    </tr>
+                    <tr v-if="salesLogs.length === 0">
+                      <td colspan="5">No sales logs yet.</td>
+                    </tr>
+                  </tbody>
+                </table>
               </div>
             </div>
 
@@ -620,7 +652,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 
 interface Property {
   id: string
@@ -681,6 +713,12 @@ const showEditListingModal = ref(false)
 const showNotifications = ref(false)
 const toasts = ref<Toast[]>([])
 const session = ref<Session | null>(null)
+const sessionTimeLeftMs = ref(0)
+const sessionTimeLeftLabel = ref('30:00')
+let sessionTimerId: number | null = null
+const SESSION_TTL_MS = 30 * 60 * 1000
+const SESSION_KEY = 'msrp_re.session.v2'
+const SESSION_EXP_KEY = 'msrp_re.session_exp.v1'
 
 const properties = ref<Property[]>([])
 const allListingsRaw = ref<any[]>([])
@@ -735,6 +773,7 @@ const navItems = computed(() => {
 const managementTabs = [
   { id: 'listings', label: 'Listings Admin' },
   { id: 'requests', label: 'Active Requests' },
+  { id: 'sales', label: 'Sales Logs' },
   { id: 'economy', label: 'Economy Admin' },
 ]
 
@@ -873,6 +912,43 @@ function removeToast(id: number) {
 
 const displayName = computed(() => session.value?.user.global_name || session.value?.user.username || 'Guest')
 
+function formatCountdown(ms: number) {
+  const safe = Math.max(0, Math.floor(ms / 1000))
+  const minutes = Math.floor(safe / 60)
+  const seconds = safe % 60
+  return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`
+}
+
+function stopSessionTimer() {
+  if (sessionTimerId !== null) {
+    window.clearInterval(sessionTimerId)
+    sessionTimerId = null
+  }
+}
+
+function startSessionTimer() {
+  stopSessionTimer()
+  const expiresAt = Number(localStorage.getItem(SESSION_EXP_KEY) || 0)
+  if (!session.value || !expiresAt) return
+  const tick = () => {
+    const remaining = expiresAt - Date.now()
+    sessionTimeLeftMs.value = Math.max(0, remaining)
+    sessionTimeLeftLabel.value = formatCountdown(remaining)
+    if (remaining <= 0) {
+      expireSession()
+    }
+  }
+  tick()
+  sessionTimerId = window.setInterval(tick, 1000)
+}
+
+function setSession(sessionPayload: Session) {
+  session.value = sessionPayload
+  localStorage.setItem(SESSION_KEY, JSON.stringify(sessionPayload))
+  localStorage.setItem(SESSION_EXP_KEY, String(Date.now() + SESSION_TTL_MS))
+  startSessionTimer()
+}
+
 function money(value: number) {
   return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(
     Number(value || 0),
@@ -898,8 +974,7 @@ async function completeOauth() {
     const response = await fetch(url.toString(), { headers: { Accept: 'application/json', 'x-msrp-client-exchange': '1' } })
     const payload = await response.json()
     if (!payload?.ok) throw new Error(payload?.error || 'Discord login failed.')
-    session.value = payload
-    localStorage.setItem('msrp_re.session.v2', JSON.stringify(payload))
+    setSession(payload)
   } catch (error) {
     showToast('Login Failed', error instanceof Error ? error.message : 'Discord login failed.', 'error')
   }
@@ -908,8 +983,16 @@ async function completeOauth() {
 
 function restoreSession() {
   try {
-    const saved = localStorage.getItem('msrp_re.session.v2')
-    if (saved) session.value = JSON.parse(saved)
+    const saved = localStorage.getItem(SESSION_KEY)
+    const expiresAt = Number(localStorage.getItem(SESSION_EXP_KEY) || 0)
+    if (!saved || !expiresAt) return
+    if (Date.now() >= expiresAt) {
+      localStorage.removeItem(SESSION_KEY)
+      localStorage.removeItem(SESSION_EXP_KEY)
+      return
+    }
+    session.value = JSON.parse(saved)
+    startSessionTimer()
   } catch {}
 }
 
@@ -918,8 +1001,21 @@ function startDiscordLogin() {
 }
 
 function logout() {
+  clearSession(false)
+}
+
+function expireSession() {
+  clearSession(true)
+}
+
+function clearSession(expired: boolean) {
+  stopSessionTimer()
+  sessionTimeLeftMs.value = 0
+  sessionTimeLeftLabel.value = '00:00'
   session.value = null
-  localStorage.removeItem('msrp_re.session.v2')
+  localStorage.removeItem(SESSION_KEY)
+  localStorage.removeItem(SESSION_EXP_KEY)
+  if (expired) showToast('Session Expired', 'You were logged out after 30 minutes.', 'error')
 }
 
 async function refreshEconomy() {
@@ -1112,20 +1208,74 @@ async function submitEditListing() {
   }
 }
 
+async function optimizeImageForSheets(file: File, maxChars = 45000): Promise<string> {
+  const toDataUrl = (blob: Blob) =>
+    new Promise<string>((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => resolve(String(reader.result || ''))
+      reader.onerror = () => reject(reader.error || new Error('Failed to read file.'))
+      reader.readAsDataURL(blob)
+    })
+
+  const sourceDataUrl = await toDataUrl(file)
+  const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+    const img = new Image()
+    img.onload = () => resolve(img)
+    img.onerror = () => reject(new Error('Failed to decode image.'))
+    img.src = sourceDataUrl
+  })
+
+  const render = (maxWidth: number, maxHeight: number, quality: number) => {
+    const scale = Math.min(1, maxWidth / image.width, maxHeight / image.height)
+    const width = Math.max(1, Math.round(image.width * scale))
+    const height = Math.max(1, Math.round(image.height * scale))
+    const canvas = document.createElement('canvas')
+    canvas.width = width
+    canvas.height = height
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return ''
+    ctx.drawImage(image, 0, 0, width, height)
+    return canvas.toDataURL('image/jpeg', quality)
+  }
+
+  const attempts: Array<[number, number, number]> = [
+    [1280, 720, 0.82],
+    [1280, 720, 0.72],
+    [1280, 720, 0.62],
+    [960, 540, 0.72],
+    [960, 540, 0.62],
+    [800, 450, 0.6],
+  ]
+
+  for (const [w, h, q] of attempts) {
+    const candidate = render(w, h, q)
+    if (candidate && candidate.length <= maxChars) return candidate
+  }
+
+  return ''
+}
+
 async function onCreateListingImageSelected(event: Event) {
   const input = event.target as HTMLInputElement
   const file = input.files?.[0]
   if (!file) return
   createListingDraft.imageName = file.name
-  const reader = new FileReader()
-  await new Promise<void>((resolve, reject) => {
-    reader.onload = () => {
-      createListingDraft.imageUrl = String(reader.result || '')
-      resolve()
+  try {
+    const optimized = await optimizeImageForSheets(file)
+    if (!optimized) {
+      createListingDraft.imageUrl = ''
+      showToast(
+        'Image Too Large',
+        'Image is too large for Google Sheets storage. Use a smaller image or external image URL.',
+        'error',
+      )
+      return
     }
-    reader.onerror = () => reject(reader.error)
-    reader.readAsDataURL(file)
-  })
+    createListingDraft.imageUrl = optimized
+  } catch (error) {
+    createListingDraft.imageUrl = ''
+    showToast('Image Failed', error instanceof Error ? error.message : 'Failed to process image.', 'error')
+  }
 }
 
 async function submitCreateListing() {
@@ -1207,6 +1357,10 @@ onMounted(async () => {
   } catch (error) {
     showToast('Load Failed', error instanceof Error ? error.message : 'Failed to load live data.', 'error')
   }
+})
+
+onBeforeUnmount(() => {
+  stopSessionTimer()
 })
 </script>
 
@@ -1502,6 +1656,23 @@ onMounted(async () => {
   display: flex;
   align-items: center;
   gap: 12px;
+}
+
+.session-timer {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  color: #7ee787;
+  background: rgba(35, 165, 89, 0.12);
+  border: 1px solid rgba(35, 165, 89, 0.3);
+  border-radius: 999px;
+  padding: 8px 12px;
+}
+
+.session-timer.warning {
+  color: #faa61a;
+  background: rgba(250, 166, 26, 0.12);
+  border-color: rgba(250, 166, 26, 0.35);
 }
 
 .icon-button {
