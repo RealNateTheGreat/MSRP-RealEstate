@@ -91,22 +91,6 @@
             </div>
           </div>
 
-          <!-- Recent Activity -->
-          <div class="activity-section">
-            <h2 class="subsection-title">Recent Activity</h2>
-            <div class="activity-list">
-              <div class="activity-item" v-for="activity in recentActivity" :key="activity.id">
-                <div class="activity-icon" :style="{ background: activity.color }">
-                  <span v-html="activity.icon"></span>
-                </div>
-                <div class="activity-content">
-                  <div class="activity-title">{{ activity.title }}</div>
-                  <div class="activity-time">{{ activity.time }}</div>
-                </div>
-                <div class="activity-amount" :class="activity.type">{{ activity.amount }}</div>
-              </div>
-            </div>
-          </div>
         </section>
 
         <!-- Marketplace Tab -->
@@ -245,8 +229,8 @@
                       <td>${{ listing.price.toLocaleString() }}</td>
                       <td><span :class="['status-badge', listing.status]">{{ listing.status }}</span></td>
                       <td>
-                        <button class="table-action-btn">Edit</button>
-                        <button class="table-action-btn danger">Delete</button>
+                        <button class="table-action-btn" type="button" @click="openEditListingModal(listing)">Edit</button>
+                        <button class="table-action-btn danger" type="button" @click="confirmDeleteListing(listing)">Delete</button>
                       </td>
                     </tr>
                   </tbody>
@@ -291,6 +275,51 @@
                     </button>
                   </div>
                 </div>
+              </div>
+            </div>
+
+            <div v-if="activeManagementTab === 'economy'" class="management-panel">
+              <h2>Economy Admin</h2>
+              <p class="section-description">Search a Discord user ID and edit economy values.</p>
+              <div class="form-group">
+                <label>User ID</label>
+                <input v-model.trim="economyAdmin.targetUserId" class="form-input" type="text" placeholder="Enter Discord user ID" />
+              </div>
+              <div class="form-actions">
+                <button class="primary-button" type="button" @click="loadEconomyUser">Load User Economy</button>
+              </div>
+
+              <div v-if="economyAdmin.loaded" class="stats-grid">
+                <div class="stat-card">
+                  <div class="stat-content">
+                    <div class="stat-label">Cash</div>
+                    <div class="stat-value">{{ money(economyAdmin.cash) }}</div>
+                  </div>
+                </div>
+                <div class="stat-card">
+                  <div class="stat-content">
+                    <div class="stat-label">Bank</div>
+                    <div class="stat-value">{{ money(economyAdmin.bank) }}</div>
+                  </div>
+                </div>
+              </div>
+
+              <div v-if="economyAdmin.loaded" class="form-row">
+                <div class="form-group">
+                  <label>Set Cash</label>
+                  <input v-model.number="economyAdmin.targetCash" class="form-input" type="number" min="0" />
+                </div>
+                <div class="form-group">
+                  <label>Set Bank</label>
+                  <input v-model.number="economyAdmin.targetBank" class="form-input" type="number" min="0" />
+                </div>
+              </div>
+              <div v-if="economyAdmin.loaded" class="form-group">
+                <label>Reason</label>
+                <input v-model.trim="economyAdmin.reason" class="form-input" type="text" placeholder="Reason for audit log" />
+              </div>
+              <div v-if="economyAdmin.loaded" class="form-actions">
+                <button class="primary-button" type="button" @click="saveEconomyUser">Save Economy</button>
               </div>
             </div>
           </div>
@@ -415,15 +444,16 @@
 
           <h2 class="modal-title">Create New Listing</h2>
 
-          <form class="create-form">
+          <form class="create-form" @submit.prevent="submitCreateListing">
             <div class="form-row">
               <div class="form-group">
                 <label>Property Title</label>
-                <input type="text" placeholder="Modern Downtown Apartment" class="form-input">
+                <input v-model.trim="createListingDraft.title" type="text" placeholder="Modern Downtown Apartment" class="form-input" required>
               </div>
               <div class="form-group">
                 <label>District</label>
-                <select class="form-input">
+                <select v-model="createListingDraft.district" class="form-input" required>
+                  <option value="">Select district</option>
                   <option>Downtown</option>
                   <option>Suburbs</option>
                   <option>Industrial</option>
@@ -434,34 +464,31 @@
             <div class="form-row">
               <div class="form-group">
                 <label>Price</label>
-                <input type="number" placeholder="50000" class="form-input">
+                <input v-model.number="createListingDraft.price" type="number" placeholder="50000" class="form-input" min="1" required>
               </div>
               <div class="form-group">
-                <label>Property Type</label>
-                <select class="form-input">
-                  <option>Residential</option>
-                  <option>Commercial</option>
-                  <option>Industrial</option>
-                </select>
+                <label>Seller User ID (optional)</label>
+                <input v-model.trim="createListingDraft.sellerUserId" type="text" placeholder="Defaults to receiver user id" class="form-input">
               </div>
             </div>
 
             <div class="form-group">
               <label>Description</label>
-              <textarea placeholder="Enter property description..." class="form-textarea" rows="4"></textarea>
+              <textarea v-model.trim="createListingDraft.description" placeholder="Enter property description..." class="form-textarea" rows="4"></textarea>
             </div>
 
             <div class="form-group">
               <label>Property Image</label>
               <div class="file-upload">
-                <input type="file" id="file-upload" hidden>
+                <input type="file" id="file-upload" hidden accept="image/*" @change="onCreateListingImageSelected">
                 <label for="file-upload" class="file-upload-label">
                   <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
                     <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/>
                   </svg>
-                  Choose Image
+                  {{ createListingDraft.imageName || 'Choose Image' }}
                 </label>
               </div>
+              <img v-if="createListingDraft.imageUrl" :src="createListingDraft.imageUrl" alt="Listing preview" class="upload-preview" />
             </div>
 
             <div class="form-actions">
@@ -469,6 +496,100 @@
               <button type="submit" class="primary-button">Create Listing</button>
             </div>
           </form>
+        </div>
+      </div>
+    </transition>
+
+    <transition name="modal">
+      <div v-if="showEditListingModal" class="modal-overlay" @click="showEditListingModal = false">
+        <div class="modal-container create-modal" @click.stop>
+          <button class="modal-close" @click="showEditListingModal = false">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/>
+            </svg>
+          </button>
+          <h2 class="modal-title">Edit Listing</h2>
+          <form class="create-form" @submit.prevent="submitEditListing">
+            <div class="form-row">
+              <div class="form-group">
+                <label>Property Title</label>
+                <input v-model.trim="editListingDraft.title" class="form-input" type="text" required />
+              </div>
+              <div class="form-group">
+                <label>District</label>
+                <input v-model.trim="editListingDraft.district" class="form-input" type="text" required />
+              </div>
+            </div>
+            <div class="form-row">
+              <div class="form-group">
+                <label>Price</label>
+                <input v-model.number="editListingDraft.price" class="form-input" type="number" min="1" required />
+              </div>
+              <div class="form-group">
+                <label>Status</label>
+                <select v-model="editListingDraft.status" class="form-input">
+                  <option value="listed">listed</option>
+                  <option value="sold">sold</option>
+                </select>
+              </div>
+            </div>
+            <div class="form-group">
+              <label>Description</label>
+              <textarea v-model.trim="editListingDraft.description" class="form-textarea" rows="4"></textarea>
+            </div>
+            <div class="form-group">
+              <label>Image URL</label>
+              <input v-model.trim="editListingDraft.imageUrl" class="form-input" type="text" />
+            </div>
+            <img v-if="editListingDraft.imageUrl" :src="editListingDraft.imageUrl" alt="Edit preview" class="upload-preview" />
+            <div class="form-actions">
+              <button type="button" class="secondary-button" @click="showEditListingModal = false">Cancel</button>
+              <button type="submit" class="primary-button">Save Changes</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </transition>
+
+    <transition name="modal">
+      <div v-if="deleteConfirm.open" class="modal-overlay" @click="deleteConfirm.open = false">
+        <div class="modal-container confirm-modal" @click.stop>
+          <h2 class="modal-title">Delete Listing?</h2>
+          <p class="section-description">Are you sure you want to delete <strong>{{ deleteConfirm.title }}</strong>? This cannot be undone.</p>
+          <div class="form-actions">
+            <button class="secondary-button" type="button" @click="deleteConfirm.open = false">No</button>
+            <button class="danger-button" type="button" @click="deleteListingConfirmed">Yes, Delete</button>
+          </div>
+        </div>
+      </div>
+    </transition>
+
+    <transition name="modal">
+      <div v-if="showNotifications" class="modal-overlay" @click="showNotifications = false">
+        <div class="modal-container notifications-modal" @click.stop>
+          <button class="modal-close" @click="showNotifications = false">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/>
+            </svg>
+          </button>
+          <h2 class="modal-title">Notifications & Recent Activity</h2>
+          <div class="activity-list">
+            <div class="activity-item" v-for="activity in recentActivity" :key="activity.id">
+              <div class="activity-icon" :style="{ background: activity.color }">
+                <span v-html="activity.icon"></span>
+              </div>
+              <div class="activity-content">
+                <div class="activity-title">{{ activity.title }}</div>
+                <div class="activity-time">{{ activity.time }}</div>
+              </div>
+              <div class="activity-amount" :class="activity.type">{{ activity.amount }}</div>
+            </div>
+            <div v-if="recentActivity.length === 0" class="activity-item">
+              <div class="activity-content">
+                <div class="activity-title">No recent activity yet.</div>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     </transition>
@@ -556,16 +677,47 @@ const searchQuery = ref('')
 const selectedProperty = ref<Property | null>(null)
 const selectedPropertySettings = ref<OwnedProperty | null>(null)
 const showCreateListingModal = ref(false)
+const showEditListingModal = ref(false)
 const showNotifications = ref(false)
 const toasts = ref<Toast[]>([])
 const session = ref<Session | null>(null)
 
 const properties = ref<Property[]>([])
+const allListingsRaw = ref<any[]>([])
 const ownedProperties = ref<OwnedProperty[]>([])
 const purchaseRequests = ref<any[]>([])
 const salesLogs = ref<any[]>([])
 const myRequests = ref<any[]>([])
 const economy = reactive({ cash: 0, bank: 0, error: '' })
+const economyAdmin = reactive({
+  targetUserId: '',
+  loaded: false,
+  cash: 0,
+  bank: 0,
+  targetCash: 0,
+  targetBank: 0,
+  reason: 'MSRP management economy update',
+})
+const createListingDraft = reactive({
+  title: '',
+  district: '',
+  price: 1,
+  description: '',
+  sellerUserId: '',
+  imageUrl: '',
+  imageName: '',
+})
+const editListingDraft = reactive({
+  id: '',
+  title: '',
+  district: '',
+  description: '',
+  price: 1,
+  status: 'listed',
+  sellerUserId: '',
+  imageUrl: '',
+})
+const deleteConfirm = reactive({ open: false, listingId: '', title: '' })
 
 const navItems = computed(() => {
   const items = [
@@ -603,7 +755,18 @@ const recentActivity = computed(() => salesLogs.value.slice(0, 5).map((log: any)
   icon: '<svg width="20" height="20" viewBox="0 0 24 24" fill="white"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7z"/></svg>',
 })))
 
-const allListings = computed(() => properties.value.map((p: any) => ({ ...p, status: p.status || 'listed' })))
+const allListings = computed(() =>
+  allListingsRaw.value.map((item: any) => ({
+    id: String(item.id),
+    title: String(item.title || ''),
+    district: String(item.district || ''),
+    description: String(item.description || ''),
+    price: Number(item.price || 0),
+    image: String(item.imageUrl || '/MSRP.png'),
+    status: String(item.status || 'listed'),
+    sellerUserId: String(item.sellerUserId || ''),
+  })),
+)
 
 const currentTabLabel = computed(() => {
   return navItems.value.find(item => item.id === activeTab.value)?.label || 'Dashboard'
@@ -771,7 +934,8 @@ async function loadListings() {
   const response = await fetch('/api/listings')
   const payload = await response.json()
   if (!payload?.ok) throw new Error(payload?.error || 'Failed to load listings.')
-  properties.value = (payload.listings || [])
+  allListingsRaw.value = payload.listings || []
+  properties.value = allListingsRaw.value
     .filter((item: any) => String(item.status) === 'listed')
     .map((item: any) => ({
       id: String(item.id),
@@ -829,6 +993,17 @@ async function loadManagementRequests() {
     status: req.status,
     requestId: req.id,
   }))
+
+  const pendingCounts: Record<string, number> = {}
+  for (const req of payload.requests || []) {
+    if (String(req.status) !== 'pending') continue
+    const listingId = String(req.listingId || '')
+    pendingCounts[listingId] = (pendingCounts[listingId] || 0) + 1
+  }
+  ownedProperties.value = ownedProperties.value.map((item) => ({
+    ...item,
+    activeRequests: pendingCounts[item.id] || 0,
+  }))
 }
 
 async function loadSalesLogs() {
@@ -862,6 +1037,162 @@ async function loadAll() {
   await loadListings()
   if (session.value) {
     await Promise.all([refreshEconomy(), loadActiveProperties(), loadManagementRequests(), loadSalesLogs(), loadMyRequests()])
+  }
+}
+
+function openEditListingModal(listing: any) {
+  Object.assign(editListingDraft, {
+    id: String(listing.id || ''),
+    title: String(listing.title || ''),
+    district: String(listing.district || ''),
+    description: String(listing.description || ''),
+    price: Number(listing.price || 1),
+    status: String(listing.status || 'listed'),
+    sellerUserId: String(listing.sellerUserId || ''),
+    imageUrl: String(listing.image || listing.imageUrl || ''),
+  })
+  showEditListingModal.value = true
+}
+
+function confirmDeleteListing(listing: any) {
+  deleteConfirm.open = true
+  deleteConfirm.listingId = String(listing.id || '')
+  deleteConfirm.title = String(listing.title || 'this listing')
+}
+
+async function deleteListingConfirmed() {
+  if (!session.value || !deleteConfirm.listingId) return
+  try {
+    const response = await fetch('/api/management/listings', {
+      method: 'DELETE',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        requesterUserId: session.value.user.id,
+        listingId: deleteConfirm.listingId,
+      }),
+    })
+    const payload = await response.json()
+    if (!payload?.ok) throw new Error(payload?.error || 'Failed to delete listing.')
+    showToast('Listing Deleted', 'Listing removed from database.', 'success')
+    deleteConfirm.open = false
+    await loadAll()
+  } catch (error) {
+    showToast('Delete Failed', error instanceof Error ? error.message : 'Failed to delete listing.', 'error')
+  }
+}
+
+async function submitEditListing() {
+  if (!session.value || !editListingDraft.id) return
+  try {
+    const response = await fetch('/api/management/listings', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        requesterUserId: session.value.user.id,
+        listingId: editListingDraft.id,
+        title: editListingDraft.title,
+        district: editListingDraft.district,
+        description: editListingDraft.description,
+        price: editListingDraft.price,
+        status: editListingDraft.status,
+        sellerUserId: editListingDraft.sellerUserId,
+        imageUrl: editListingDraft.imageUrl,
+      }),
+    })
+    const payload = await response.json()
+    if (!payload?.ok) throw new Error(payload?.error || 'Failed to update listing.')
+    showToast('Listing Updated', 'Changes have been saved.', 'success')
+    showEditListingModal.value = false
+    await loadAll()
+  } catch (error) {
+    showToast('Update Failed', error instanceof Error ? error.message : 'Failed to update listing.', 'error')
+  }
+}
+
+async function onCreateListingImageSelected(event: Event) {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  if (!file) return
+  createListingDraft.imageName = file.name
+  const reader = new FileReader()
+  await new Promise<void>((resolve, reject) => {
+    reader.onload = () => {
+      createListingDraft.imageUrl = String(reader.result || '')
+      resolve()
+    }
+    reader.onerror = () => reject(reader.error)
+    reader.readAsDataURL(file)
+  })
+}
+
+async function submitCreateListing() {
+  if (!session.value) return
+  try {
+    const response = await fetch('/api/management/create-listing', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        userId: session.value.user.id,
+        title: createListingDraft.title,
+        district: createListingDraft.district,
+        price: Number(createListingDraft.price || 0),
+        description: createListingDraft.description,
+        imageUrl: createListingDraft.imageUrl,
+        sellerUserId: createListingDraft.sellerUserId,
+      }),
+    })
+    const payload = await response.json()
+    if (!payload?.ok) throw new Error(payload?.error || 'Failed to create listing.')
+    showToast('Listing Created', 'New listing added successfully.', 'success')
+    Object.assign(createListingDraft, { title: '', district: '', price: 1, description: '', sellerUserId: '', imageUrl: '', imageName: '' })
+    showCreateListingModal.value = false
+    await loadAll()
+  } catch (error) {
+    showToast('Create Failed', error instanceof Error ? error.message : 'Failed to create listing.', 'error')
+  }
+}
+
+async function loadEconomyUser() {
+  if (!session.value || !economyAdmin.targetUserId) return
+  try {
+    const url = new URL('/api/management/user-economy', window.location.origin)
+    url.searchParams.set('requesterUserId', session.value.user.id)
+    url.searchParams.set('targetUserId', economyAdmin.targetUserId)
+    const response = await fetch(url.toString())
+    const payload = await response.json()
+    if (!payload?.ok) throw new Error(payload?.error || 'Failed to load user economy.')
+    economyAdmin.cash = Number(payload.economy?.cash || 0)
+    economyAdmin.bank = Number(payload.economy?.bank || 0)
+    economyAdmin.targetCash = economyAdmin.cash
+    economyAdmin.targetBank = economyAdmin.bank
+    economyAdmin.loaded = true
+  } catch (error) {
+    showToast('Load Failed', error instanceof Error ? error.message : 'Failed to load user economy.', 'error')
+  }
+}
+
+async function saveEconomyUser() {
+  if (!session.value || !economyAdmin.targetUserId || !economyAdmin.loaded) return
+  try {
+    const response = await fetch('/api/management/user-economy', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        requesterUserId: session.value.user.id,
+        targetUserId: economyAdmin.targetUserId,
+        mode: 'set',
+        targetCash: Number(economyAdmin.targetCash || 0),
+        targetBank: Number(economyAdmin.targetBank || 0),
+        reason: economyAdmin.reason || 'MSRP management economy update',
+      }),
+    })
+    const payload = await response.json()
+    if (!payload?.ok) throw new Error(payload?.error || 'Failed to save user economy.')
+    economyAdmin.cash = Number(payload.economy?.cash || 0)
+    economyAdmin.bank = Number(payload.economy?.bank || 0)
+    showToast('Economy Updated', 'User economy values saved.', 'success')
+  } catch (error) {
+    showToast('Save Failed', error instanceof Error ? error.message : 'Failed to save user economy.', 'error')
   }
 }
 
@@ -2333,6 +2664,16 @@ onMounted(async () => {
   padding: 32px;
 }
 
+.notifications-modal {
+  max-width: 760px;
+  padding: 24px;
+}
+
+.confirm-modal {
+  max-width: 520px;
+  padding: 24px;
+}
+
 .create-form {
   display: flex;
   flex-direction: column;
@@ -2369,6 +2710,17 @@ onMounted(async () => {
   border-color: #5865f2;
   color: #f2f3f5;
   background: rgba(88, 101, 242, 0.05);
+}
+
+.upload-preview {
+  margin-top: 12px;
+  width: 100%;
+  max-height: 220px;
+  object-fit: contain;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: #1e1f22;
+  padding: 8px;
 }
 
 .form-actions {

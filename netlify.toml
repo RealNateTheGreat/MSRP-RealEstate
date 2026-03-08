@@ -41,6 +41,11 @@
   status = 200
 
 [[redirects]]
+  from = "/api/management/listings"
+  to = "/.netlify/functions/management-listings"
+  status = 200
+
+[[redirects]]
   from = "/api/listings/request-purchase"
   to = "/.netlify/functions/request-purchase"
   status = 200
@@ -58,6 +63,11 @@
 [[redirects]]
   from = "/api/management/owned-listings"
   to = "/.netlify/functions/management-owned-listings"
+  status = 200
+
+[[redirects]]
+  from = "/api/management/user-economy"
+  to = "/.netlify/functions/management-user-economy"
   status = 200
 
 [[redirects]]
