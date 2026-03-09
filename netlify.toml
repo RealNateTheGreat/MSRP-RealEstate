@@ -16,6 +16,11 @@
   status = 200
 
 [[redirects]]
+  from = "/api/auth/discord/session"
+  to = "/.netlify/functions/discord-session"
+  status = 200
+
+[[redirects]]
   from = "/api/economy/balance"
   to = "/.netlify/functions/economy-balance"
   status = 200

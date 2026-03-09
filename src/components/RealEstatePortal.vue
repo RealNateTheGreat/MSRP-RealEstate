@@ -63,11 +63,6 @@
             </svg>
             <span class="notification-dot"></span>
           </button>
-          <button class="icon-button">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
-              <path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/>
-            </svg>
-          </button>
           <button v-if="!session" class="primary-button" type="button" @click="startDiscordLogin">Sign in</button>
           <button v-else class="secondary-button" type="button" @click="logout">Logout</button>
         </div>
@@ -75,8 +70,15 @@
 
       <!-- Content Sections -->
       <div class="content-wrapper">
+        <section v-if="!session" class="content-section welcome-section">
+          <img src="/MSRPBanner.webp" alt="MSRP Banner" class="welcome-banner" />
+          <h1 class="section-title">MSRP Real Estate</h1>
+          <p class="section-description">Sign in with Discord to access the real estate dashboard, listings, active properties, and management tools.</p>
+          <button class="primary-button" type="button" @click="startDiscordLogin">Sign in with Discord</button>
+        </section>
+
         <!-- Dashboard Tab -->
-        <section v-if="activeTab === 'dashboard'" class="content-section">
+        <section v-if="session && activeTab === 'dashboard'" class="content-section">
           <h1 class="section-title">Dashboard</h1>
           <p class="section-description">Welcome back! Here's your economy overview and recent activity.</p>
 
@@ -97,7 +99,7 @@
         </section>
 
         <!-- Marketplace Tab -->
-        <section v-if="activeTab === 'marketplace'" class="content-section">
+        <section v-if="session && activeTab === 'marketplace'" class="content-section">
           <div class="section-header">
             <div>
               <h1 class="section-title">Property Marketplace</h1>
@@ -146,7 +148,7 @@
         </section>
 
         <!-- Properties Tab -->
-        <section v-if="activeTab === 'properties'" class="content-section">
+        <section v-if="session && activeTab === 'properties'" class="content-section">
           <h1 class="section-title">My Properties</h1>
           <p class="section-description">Manage your owned properties and view active requests.</p>
 
@@ -183,7 +185,7 @@
         </section>
 
         <!-- Management Tab -->
-        <section v-if="activeTab === 'management'" class="content-section">
+        <section v-if="session && activeTab === 'management'" class="content-section">
           <h1 class="section-title">Management Panel</h1>
           <p class="section-description">Administrative controls for listings, requests, and economy management.</p>
 
@@ -215,6 +217,7 @@
                     <tr>
                       <th>Property</th>
                       <th>District</th>
+                      <th>Owner</th>
                       <th>Price</th>
                       <th>Status</th>
                       <th>Actions</th>
@@ -229,6 +232,7 @@
                         </div>
                       </td>
                       <td>{{ listing.district }}</td>
+                      <td>{{ listing.ownerName || listing.ownerUserId || 'Unowned' }}</td>
                       <td>${{ listing.price.toLocaleString() }}</td>
                       <td><span :class="['status-badge', listing.status]">{{ listing.status }}</span></td>
                       <td>
@@ -716,6 +720,7 @@ const session = ref<Session | null>(null)
 const sessionTimeLeftMs = ref(0)
 const sessionTimeLeftLabel = ref('30:00')
 let sessionTimerId: number | null = null
+let roleRefreshTimerId: number | null = null
 const SESSION_TTL_MS = 30 * 60 * 1000
 const SESSION_KEY = 'msrp_re.session.v2'
 const SESSION_EXP_KEY = 'msrp_re.session_exp.v1'
@@ -758,6 +763,7 @@ const editListingDraft = reactive({
 const deleteConfirm = reactive({ open: false, listingId: '', title: '' })
 
 const navItems = computed(() => {
+  if (!session.value) return []
   const items = [
     { id: 'dashboard', label: 'Dashboard', icon: '<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M3 13h8V3H3v10zm0 8h8v-6H3v6zm10 0h8V11h-8v10zm0-18v6h8V3h-8z"/></svg>' },
     { id: 'marketplace', label: 'Marketplace', icon: '<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M7 18c-1.1 0-1.99.9-1.99 2S5.9 22 7 22s2-.9 2-2-.9-2-2-2zM1 2v2h2l3.6 7.59-1.35 2.45c-.16.28-.25.61-.25.96 0 1.1.9 2 2 2h12v-2H7.42c-.14 0-.25-.11-.25-.25l.03-.12.9-1.63h7.45c.75 0 1.41-.41 1.75-1.03l3.58-6.49c.08-.14.12-.31.12-.48 0-.55-.45-1-1-1H5.21l-.94-2H1z"/></svg>' },
@@ -804,10 +810,13 @@ const allListings = computed(() =>
     image: String(item.imageUrl || '/MSRP.png'),
     status: String(item.status || 'listed'),
     sellerUserId: String(item.sellerUserId || ''),
+    ownerUserId: String(item.ownerUserId || ''),
+    ownerName: String(item.ownerName || ''),
   })),
 )
 
 const currentTabLabel = computed(() => {
+  if (!session.value) return 'Welcome'
   return navItems.value.find(item => item.id === activeTab.value)?.label || 'Dashboard'
 })
 
@@ -926,6 +935,51 @@ function stopSessionTimer() {
   }
 }
 
+function stopRoleRefreshTimer() {
+  if (roleRefreshTimerId !== null) {
+    window.clearInterval(roleRefreshTimerId)
+    roleRefreshTimerId = null
+  }
+}
+
+async function refreshSessionRoles() {
+  if (!session.value) return
+  try {
+    const url = new URL('/api/auth/discord/session', window.location.origin)
+    url.searchParams.set('userId', session.value.user.id)
+    const response = await fetch(url.toString(), { headers: { Accept: 'application/json' } })
+    const payload = await response.json()
+    if (!payload?.ok || !payload?.guildMembership) return
+
+    const hadManagement = Boolean(
+      session.value.guildMembership?.permissions?.hasManagementRole || session.value.guildMembership?.permissions?.hasAgentRole,
+    )
+    const hasManagementNow = Boolean(
+      payload.guildMembership?.permissions?.hasManagementRole || payload.guildMembership?.permissions?.hasAgentRole,
+    )
+
+    session.value = {
+      ...session.value,
+      guildMembership: payload.guildMembership,
+    }
+    localStorage.setItem(SESSION_KEY, JSON.stringify(session.value))
+
+    if (hadManagement && !hasManagementNow && activeTab.value === 'management') {
+      activeTab.value = 'dashboard'
+      activeManagementTab.value = 'listings'
+      showToast('Access Updated', 'Your management access was removed.', 'error')
+    }
+  } catch {}
+}
+
+function startRoleRefreshTimer() {
+  stopRoleRefreshTimer()
+  if (!session.value) return
+  roleRefreshTimerId = window.setInterval(() => {
+    void refreshSessionRoles()
+  }, 60000)
+}
+
 function startSessionTimer() {
   stopSessionTimer()
   const expiresAt = Number(localStorage.getItem(SESSION_EXP_KEY) || 0)
@@ -947,6 +1001,8 @@ function setSession(sessionPayload: Session) {
   localStorage.setItem(SESSION_KEY, JSON.stringify(sessionPayload))
   localStorage.setItem(SESSION_EXP_KEY, String(Date.now() + SESSION_TTL_MS))
   startSessionTimer()
+  startRoleRefreshTimer()
+  void refreshSessionRoles()
 }
 
 function money(value: number) {
@@ -993,6 +1049,8 @@ function restoreSession() {
     }
     session.value = JSON.parse(saved)
     startSessionTimer()
+    startRoleRefreshTimer()
+    void refreshSessionRoles()
   } catch {}
 }
 
@@ -1010,6 +1068,7 @@ function expireSession() {
 
 function clearSession(expired: boolean) {
   stopSessionTimer()
+  stopRoleRefreshTimer()
   sessionTimeLeftMs.value = 0
   sessionTimeLeftLabel.value = '00:00'
   session.value = null
@@ -1361,6 +1420,7 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   stopSessionTimer()
+  stopRoleRefreshTimer()
 })
 </script>
 
@@ -1715,6 +1775,21 @@ onBeforeUnmount(() => {
 .content-section {
   max-width: 1400px;
   margin: 0 auto;
+}
+
+.welcome-section {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.welcome-banner {
+  width: 100%;
+  max-width: 960px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  object-fit: cover;
 }
 
 .section-title {
